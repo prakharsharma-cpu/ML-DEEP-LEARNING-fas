@@ -1,15 +1,7 @@
-# Core web app
-streamlit>=1.36.0
-
-# YOLOv8 model & computer vision
+streamlit>=1.38.0
 ultralytics>=8.2.0
-opencv-python-headless>=4.10.0.84
-pillow>=10.3.0
-numpy>=1.26.4
-
-# Optional (performance & environment)
+opencv-python-headless>=4.9.0
+Pillow>=10.2.0
+numpy>=1.26.0
 torch>=2.2.0
 torchvision>=0.17.0
-
-# Utility
-matplotlib>=3.8.0
