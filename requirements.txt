@@ -1,17 +1,15 @@
-# --- Core App ---
-streamlit>=1.31.0
+# --- Core Streamlit ---
+streamlit==1.33.0
 
-# --- Deep Learning (CPU Only, stable versions) ---
-torch==2.2.0
-torchvision==0.17.0
+# --- Core ML (light CPU versions) ---
+torch==2.2.1
+torchvision==0.17.1
 
-# --- Ultralytics YOLOv5 Repo (installed via zip fallback) ---
-ultralytics==8.0.196
+# --- YOLOv5 (light version from PyPI mirror) ---
+yolov5==7.0.12
 
-# --- Image & Video Processing ---
-opencv-python-headless==4.9.0.80
-pillow>=10.0.0
-numpy>=1.26.0
-
-# --- Data Handling ---
-pandas>=2.2.0
+# --- Image/Video/Data ---
+opencv-python-headless==4.8.1.78
+pillow==10.2.0
+numpy==1.26.4
+pandas==2.2.2
