@@ -1,7 +1,7 @@
-streamlit
 torch
 torchvision
 pillow
 opencv-python
 numpy
+streamlit
 git+https://github.com/ultralytics/yolov5.git
