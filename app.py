@@ -10,21 +10,22 @@ import numpy as np
 
 st.set_page_config(page_title="SafetyVision AI (YOLOv5 Optimized)", layout="wide")
 
-# ---------------------- Model Loader ----------------------
+# ---------------------- YOLOv5 Loader (Auto Install) ----------------------
 @st.cache_resource
 def try_load_yolov5_model(custom_weights_path: str = None):
-    """Load YOLOv5 safely using the Ultralytics YOLOv5 package."""
+    """Load YOLOv5 safely; auto-installs if missing."""
+    import importlib
     try:
         from yolov5 import YOLO
     except ImportError:
-        raise RuntimeError(
-            "⚠️ YOLOv5 package not found.\n\nRun this command once:\n"
-            "   pip install git+https://github.com/ultralytics/yolov5.git\n\n"
-            "Then restart Streamlit."
-        )
+        import subprocess, sys
+        st.warning("⚙️ YOLOv5 package missing — installing automatically. Please wait...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "git+https://github.com/ultralytics/yolov5.git"])
+        YOLO = importlib.import_module("yolov5").YOLO
+
     try:
         model = YOLO(custom_weights_path or "yolov5s.pt")
-        model.fuse()  # small speed boost
+        model.fuse()  # Slight speed boost
         return model
     except Exception as e:
         raise RuntimeError(f"❌ Model loading failed: {e}")
@@ -102,9 +103,9 @@ elif uploaded_img:
 def run_detection(model, image_source):
     """Run detection on given image source (path or ndarray)."""
     results = model.predict(source=image_source, imgsz=640, conf=0.25)
-    result_image = results[0].plot()
-    df = results[0].boxes.data.cpu().numpy() if len(results) > 0 else None
-    return result_image, df
+    annotated_img = results[0].plot()
+    detections = results[0].boxes.data.cpu().numpy() if len(results) > 0 else None
+    return annotated_img, detections
 
 if image_bytes:
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
@@ -113,9 +114,9 @@ if image_bytes:
     tmp.close()
 
     try:
-        annotated_img, df = run_detection(model, tmp.name)
+        annotated_img, detections = run_detection(model, tmp.name)
         st.image(annotated_img, caption="YOLOv5 PPE Detection", use_column_width=True)
-        st.success(f"✅ Detected {len(df) if df is not None else 0} objects.")
+        st.success(f"✅ Detected {len(detections) if detections is not None else 0} objects.")
     except Exception as e:
         st.error(f"❌ Detection failed: {e}")
 
@@ -192,7 +193,7 @@ def live_stream_loop(model, frame_interval_ms, show_fps):
     st.session_state.stop_signal = False
     info_placeholder.info("✅ Stream stopped.")
 
-# Start / Stop
+# Start / Stop Buttons
 if use_local_cam:
     if start_button:
         if not st.session_state.streaming:
@@ -214,6 +215,6 @@ c1, c2, c3 = st.columns(3)
 with c1:
     st.markdown('<div class="section-card"><h4>🧠 YOLOv5 Detection</h4><p>Fast PPE detection optimized for Streamlit and CPU use.</p></div>', unsafe_allow_html=True)
 with c2:
-    st.markdown('<div class="section-card"><h4>💬 AI Assistant</h4><p>Conversational safety assistant (optional simulation).</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-card"><h4>💬 AI Assistant</h4><p>Conversational safety assistant (simulated).</p></div>', unsafe_allow_html=True)
 with c3:
     st.markdown('<div class="section-card"><h4>📡 Live Monitoring</h4><p>Real-time webcam detection with optimized performance.</p></div>', unsafe_allow_html=True)
