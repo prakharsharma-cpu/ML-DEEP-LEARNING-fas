@@ -1,26 +1,24 @@
 import streamlit as st
-from ultralytics import YOLO
-from PIL import Image
+import torch
 import tempfile
+from PIL import Image
+import numpy as np
+import io
 
-# ----------------- Streamlit Page Setup -----------------
+# ----------------- Streamlit Config -----------------
 st.set_page_config(page_title="SafetyVision AI", layout="wide")
 
-# ----------------- Load YOLO Model -----------------
+# ----------------- Load YOLOv5 Model -----------------
 @st.cache_resource
 def load_model():
-    try:
-        # Replace with your trained model path if you have one
-        model = YOLO("ppe_yolov8.pt")
-        st.sidebar.success("✅ Custom PPE model loaded successfully.")
-    except Exception:
-        model = YOLO("yolov8n.pt")
-        st.sidebar.warning("⚠️ Using default YOLOv8n model (no custom PPE training found).")
+    # Loads a YOLOv5s model (small, fast, pretrained on COCO)
+    # You can replace 'yolov5s' with 'yolov5m' or your custom path e.g. 'ppe_yolov5.pt'
+    model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
     return model
 
 model = load_model()
 
-# ----------------- Custom CSS -----------------
+# ----------------- Header -----------------
 st.markdown("""
     <style>
         .header {
@@ -54,7 +52,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ----------------- Header -----------------
 st.markdown("""
 <div class="header">
     <div class="logo">
@@ -76,9 +73,9 @@ show_assistant = st.sidebar.checkbox("Enable AI Assistant", value=False)
 if show_assistant:
     prompt = st.sidebar.text_area("Ask SafetyVision AI:")
     if st.sidebar.button("Send"):
-        st.sidebar.success(f"AI Assistant Response: Safety guidance for '{prompt}' generated (simulated).")
+        st.sidebar.success(f"AI Assistant: Generated safety insights for '{prompt}' (simulated).")
 
-# ----------------- Stats Overview -----------------
+# ----------------- Stats Section -----------------
 st.title("📊 System Overview")
 col1, col2, col3 = st.columns(3)
 col1.metric("Cameras Active", "12", "+2")
@@ -87,35 +84,38 @@ col3.metric("Compliance Rate", "98%", "+3%")
 st.divider()
 
 # ----------------- PPE Detection -----------------
-st.subheader("🎥 PPE Detector (YOLOv8)")
-st.write("Upload or capture an image to perform real-time PPE detection using YOLOv8.")
+st.subheader("🎥 PPE Detector (YOLOv5)")
+st.write("Upload or capture an image to perform real-time PPE detection using YOLOv5.")
 
 camera_feed = st.camera_input("Capture or Upload Image")
 uploaded_file = st.file_uploader("Or upload an image file", type=["jpg", "jpeg", "png"])
 
-# Get the image data from camera or upload
+# Determine image source
 image_data = camera_feed.getvalue() if camera_feed else (uploaded_file.read() if uploaded_file else None)
 
 if image_data:
-    # Save the uploaded bytes into a temp file
-    temp_file = tempfile.NamedTemporaryFile(delete=False)
+    # Save image bytes to temporary file
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
     temp_file.write(image_data)
     temp_file.close()
 
-    # Run YOLOv8 on the temp file
+    # Run YOLOv5 model
     results = model(temp_file.name)
-    result_image = results[0].plot()  # Draw detection boxes
 
-    # Display output
-    st.image(result_image, caption="YOLOv8 PPE Detection", use_column_width=True)
+    # Convert results to image array
+    results.render()  # updates results.imgs with bounding boxes
+    detected_image = Image.fromarray(results.ims[0])
 
-    detections = results[0].boxes.cls
-    if len(detections) > 0:
-        st.success(f"✅ Detected {len(detections)} PPE items.")
-    else:
-        st.warning("⚠️ No PPE detected.")
+    # Display detection results
+    st.image(detected_image, caption="YOLOv5 PPE Detection", use_column_width=True)
+
+    # Count detections
+    df = results.pandas().xyxy[0]
+    st.write(f"✅ **Detections:** {len(df)} objects found.")
+    if not df.empty:
+        st.dataframe(df[['name', 'confidence']])
 else:
-    st.info("📸 Please capture or upload an image to begin detection.")
+    st.info("📸 Please upload or capture an image to start detection.")
 
 # ----------------- Info Cards -----------------
 st.subheader("⚙️ System Features")
@@ -124,8 +124,8 @@ col1, col2, col3 = st.columns(3)
 with col1:
     st.markdown("""
     <div class="section-card">
-        <h4>🧠 YOLO Detection</h4>
-        <p>Real-time object detection using YOLO deep learning model for accurate PPE identification.</p>
+        <h4>🧠 YOLOv5 Detection</h4>
+        <p>Real-time object detection using YOLOv5 for fast and accurate PPE identification.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -133,7 +133,7 @@ with col2:
     st.markdown("""
     <div class="section-card">
         <h4>💬 AI Assistant</h4>
-        <p>Conversational interface powered by AI for safety insights and proactive compliance guidance.</p>
+        <p>Conversational interface powered by AI for safety insights and compliance monitoring.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -141,6 +141,6 @@ with col3:
     st.markdown("""
     <div class="section-card">
         <h4>📡 Live Monitoring</h4>
-        <p>Continuous PPE tracking and instant alerts for safety violations to ensure workplace safety.</p>
+        <p>Continuous PPE tracking and instant alerts to ensure workplace safety.</p>
     </div>
     """, unsafe_allow_html=True)
