@@ -1,220 +1,90 @@
-# app.py
 import streamlit as st
-import tempfile
 from PIL import Image
-import io
-import os
-import time
-import threading
+import torch
+import tempfile
 import numpy as np
 
-st.set_page_config(page_title="SafetyVision AI (YOLOv5 Optimized)", layout="wide")
+st.set_page_config(page_title="PPE Detection App", layout="centered")
+st.title("🦺 PPE Detection (YOLOv5 Streamlit Cloud App)")
+st.write("Upload an image and detect PPE items using YOLOv5. Works directly on Streamlit Cloud.")
 
-# ---------------------- YOLOv5 Loader (Auto Install) ----------------------
 @st.cache_resource
-def try_load_yolov5_model(custom_weights_path: str = None):
-    """Load YOLOv5 safely; auto-installs if missing."""
-    import importlib
+def load_yolov5(weights_path=None):
     try:
-        from yolov5 import YOLO
-    except ImportError:
-        import subprocess, sys
-        st.warning("⚙️ YOLOv5 package missing — installing automatically. Please wait...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "git+https://github.com/ultralytics/yolov5.git"])
-        YOLO = importlib.import_module("yolov5").YOLO
-
-    try:
-        model = YOLO(custom_weights_path or "yolov5s.pt")
-        model.fuse()  # Slight speed boost
+        if weights_path:
+            model = torch.hub.load('ultralytics/yolov5', 'custom', path=weights_path, trust_repo=True)
+        else:
+            model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True, trust_repo=True)
+        model.eval()
         return model
     except Exception as e:
-        raise RuntimeError(f"❌ Model loading failed: {e}")
+        st.error(f"Model loading failed: {e}")
+        return None
 
-# ---------------------- Styling / Header ----------------------
-st.markdown("""
-    <style>
-    .header { background-color: rgba(30,30,30,0.9); padding: 1rem 2rem; border-bottom: 1px solid #444; color: white; }
-    .section-card { background-color: #1f1f1f; border: 1px solid #333; padding: 1rem; border-radius: 8px; color: #fff; }
-    </style>
-""", unsafe_allow_html=True)
+def run_inference(model, image):
+    try:
+        results = model(image, size=640)
+        try:
+            results.render()
+        except Exception:
+            pass
+        img_out = image
+        if hasattr(results, 'imgs') and results.imgs:
+            raw = results.imgs[0]
+            if isinstance(raw, np.ndarray):
+                img_out = Image.fromarray(raw.astype('uint8'))
+        detections = []
+        try:
+            df = results.pandas().xyxy[0]
+            detections = df.to_dict(orient='records')
+        except Exception:
+            detections = []
+        return img_out, detections
+    except Exception as e:
+        st.error(f"Error during inference: {e}")
+        return image, []
 
-st.markdown("""
-<div class="header">
-  <div style="display:flex; align-items:center; gap:12px;">
-    <div style="font-size:28px;">🛡️</div>
-    <div>
-      <div style="font-weight:700; font-size:18px;">SafetyVision AI</div>
-      <div style="font-size:12px; color:gray;">PPE Detection & Monitoring (YOLOv5 Optimized)</div>
-    </div>
-  </div>
-  <div style="display:flex; align-items:center; gap:8px;">
-    <div style="padding:6px 10px; border-radius:14px; background:rgba(22,163,74,0.08); border:1px solid rgba(22,163,74,0.2); color:#16a34a;">🟢 System Active</div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
+uploaded_weights = st.sidebar.file_uploader("Upload custom YOLOv5 weights (.pt)", type=['pt'])
+uploaded_image = st.file_uploader("Upload an image", type=['jpg', 'jpeg', 'png'])
 
-# ---------------------- Sidebar ----------------------
-st.sidebar.header("⚙️ Settings")
+weights_path = None
+if uploaded_weights is not None:
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pt') as temp:
+            temp.write(uploaded_weights.read())
+            weights_path = temp.name
+    except Exception as e:
+        st.sidebar.error(f"Failed to save uploaded weights: {e}")
 
-uploaded_weights = st.sidebar.file_uploader("Upload YOLOv5 .pt weights (optional)", type=["pt"])
-custom_weights_path = None
-if uploaded_weights:
-    t = tempfile.NamedTemporaryFile(delete=False, suffix=".pt")
-    t.write(uploaded_weights.read())
-    t.flush()
-    t.close()
-    custom_weights_path = t.name
-    st.sidebar.success("✅ Custom weights uploaded.")
+model = load_yolov5(weights_path)
 
-use_custom = st.sidebar.checkbox("Use uploaded weights", value=False)
-use_local_cam = st.sidebar.checkbox("Use local webcam (OpenCV)", value=False)
-frame_interval_ms = st.sidebar.slider("Frame interval (ms)", 50, 1000, 200, 50)
-show_fps = st.sidebar.checkbox("Show FPS", value=True)
-
-# ---------------------- Load Model ----------------------
-try:
-    model = try_load_yolov5_model(custom_weights_path if use_custom else None)
-    st.sidebar.success("✅ YOLOv5 model loaded successfully.")
-except Exception as e:
-    st.sidebar.error(str(e))
+if model is None:
+    st.error('Model is not available. Please upload valid weights or check internet connection.')
     st.stop()
 
-# ---------------------- Dashboard Header ----------------------
-st.title("📊 System Overview")
-col1, col2, col3 = st.columns(3)
-col1.metric("Cameras Active", "1", "+0")
-col2.metric("Detections Today", "0", "+0")
-col3.metric("Compliance Rate", "—", "—")
-st.divider()
-
-# ---------------------- Image Detection ----------------------
-st.subheader("🎥 PPE Detector (Image Mode)")
-st.write("Upload or capture an image for YOLOv5 PPE detection.")
-
-camera_feed = st.camera_input("Capture Image")
-uploaded_img = st.file_uploader("Or upload image", type=["jpg", "jpeg", "png"])
-
-image_bytes = None
-if camera_feed:
-    image_bytes = camera_feed.getvalue()
-elif uploaded_img:
-    image_bytes = uploaded_img.read()
-
-def run_detection(model, image_source):
-    """Run detection on given image source (path or ndarray)."""
-    results = model.predict(source=image_source, imgsz=640, conf=0.25)
-    annotated_img = results[0].plot()
-    detections = results[0].boxes.data.cpu().numpy() if len(results) > 0 else None
-    return annotated_img, detections
-
-if image_bytes:
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-    tmp.write(image_bytes)
-    tmp.flush()
-    tmp.close()
-
+if uploaded_image:
     try:
-        annotated_img, detections = run_detection(model, tmp.name)
-        st.image(annotated_img, caption="YOLOv5 PPE Detection", use_column_width=True)
-        st.success(f"✅ Detected {len(detections) if detections is not None else 0} objects.")
+        image = Image.open(uploaded_image).convert('RGB')
     except Exception as e:
-        st.error(f"❌ Detection failed: {e}")
+        st.error(f"Failed to open image: {e}")
+        st.stop()
+    st.image(image, caption='Uploaded Image', use_column_width=True)
 
-# ---------------------- Optimized Live Stream ----------------------
-st.subheader("📡 Live Webcam Stream (Optimized)")
-st.write("For best performance, run locally with `streamlit run app.py` to access your webcam.")
+    if st.button('Detect PPE'):
+        with st.spinner('Detecting PPE items...'):
+            out_image, detections = run_inference(model, image)
+        st.image(out_image, caption='Detections', use_column_width=True)
 
-if "streaming" not in st.session_state:
-    st.session_state.streaming = False
-if "stop_signal" not in st.session_state:
-    st.session_state.stop_signal = False
-
-start_button = st.button("▶ Start Live Stream") if use_local_cam else None
-stop_button = st.button("⏹ Stop Stream") if use_local_cam else None
-
-live_placeholder = st.empty()
-info_placeholder = st.empty()
-
-def live_stream_loop(model, frame_interval_ms, show_fps):
-    """Optimized YOLOv5 live stream loop with resizing & frame skipping."""
-    import cv2
-
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        info_placeholder.error("❌ Could not open webcam. Run locally with camera access.")
-        st.session_state.streaming = False
-        return
-
-    frame_skip = 2       # process every 3rd frame
-    resize_width = 640   # resize for faster inference
-    processed = 0
-    displayed = 0
-    start_time = time.time()
-
-    while st.session_state.streaming and cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            info_placeholder.warning("⚠️ Failed to read frame.")
-            break
-
-        if processed % frame_skip != 0:
-            processed += 1
-            continue
-        processed += 1
-
-        h, w = frame.shape[:2]
-        if w > resize_width:
-            scale = resize_width / w
-            frame = cv2.resize(frame, (resize_width, int(h * scale)))
-
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-        try:
-            results = model.predict(source=rgb, imgsz=resize_width, conf=0.25)
-            annotated = results[0].plot()
-            pil_img = Image.fromarray(annotated)
-        except Exception as e:
-            info_placeholder.error(f"Inference error: {e}")
-            break
-
-        live_placeholder.image(pil_img, use_column_width=True)
-        displayed += 1
-
-        fps = displayed / (time.time() - start_time)
-        if show_fps:
-            info_placeholder.markdown(f"**Live FPS:** {fps:.1f} | Processed Frames: {processed}")
-        time.sleep(frame_interval_ms / 1000.0)
-
-        if st.session_state.stop_signal:
-            break
-
-    cap.release()
-    st.session_state.streaming = False
-    st.session_state.stop_signal = False
-    info_placeholder.info("✅ Stream stopped.")
-
-# Start / Stop Buttons
-if use_local_cam:
-    if start_button:
-        if not st.session_state.streaming:
-            st.session_state.streaming = True
-            st.session_state.stop_signal = False
-            threading.Thread(target=live_stream_loop, args=(model, frame_interval_ms, show_fps), daemon=True).start()
+        if detections:
+            st.subheader('Detections:')
+            for d in detections:
+                name = d.get('name') or str(d.get('class', 'unknown'))
+                conf = float(d.get('confidence', 0))
+                st.write(f"- {name} ({conf:.2f})")
         else:
-            st.warning("⚠️ Stream already running.")
-    if stop_button:
-        st.session_state.stop_signal = True
-        st.session_state.streaming = False
-        info_placeholder.info("Stopping stream...")
+            st.info('No PPE detected with sufficient confidence.')
 else:
-    st.info("Enable webcam in sidebar to use live stream (works locally only).")
+    st.info('Upload an image to begin PPE detection.')
 
-# ---------------------- Info Cards ----------------------
-st.subheader("💡 System Features")
-c1, c2, c3 = st.columns(3)
-with c1:
-    st.markdown('<div class="section-card"><h4>🧠 YOLOv5 Detection</h4><p>Fast PPE detection optimized for Streamlit and CPU use.</p></div>', unsafe_allow_html=True)
-with c2:
-    st.markdown('<div class="section-card"><h4>💬 AI Assistant</h4><p>Conversational safety assistant (simulated).</p></div>', unsafe_allow_html=True)
-with c3:
-    st.markdown('<div class="section-card"><h4>📡 Live Monitoring</h4><p>Real-time webcam detection with optimized performance.</p></div>', unsafe_allow_html=True)
+st.markdown('---')
+st.caption('YOLOv5 PPE Detection App — Streamlit Cloud Compatible. Requires only: streamlit, torch, torchvision, Pillow, opencv-python-headless.')
