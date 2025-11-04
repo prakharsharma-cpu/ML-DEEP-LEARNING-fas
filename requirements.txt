@@ -1,10 +1,25 @@
-# --- Core Dependencies ---
-streamlit>=1.37.0
-torch>=2.0.0
-torchvision>=0.15.0
-pillow>=10.0.0
-numpy>=1.25.0
+# ------------------------------
+# SmartPPE - YOLOv5 Streamlit App
+# ------------------------------
 
-# --- YOLOv5 ---
-# Installs YOLOv5 from the official ultralytics GitHub repo
+# Web app framework
+streamlit==1.38.0
+
+# Core dependencies
+numpy==1.26.4
+pillow==10.4.0
+matplotlib==3.9.2
+opencv-python==4.10.0.84
+
+# PyTorch (CPU version)
+# ⚠️ For GPU users, install CUDA version manually from pytorch.org
+torch==2.4.1
+torchvision==0.19.1
+
+# YOLOv5 (from official Ultralytics GitHub)
 git+https://github.com/ultralytics/yolov5.git
+
+# Optional helpers for consistent fonts & logs
+tqdm==4.66.5
+pandas==2.2.3
+seaborn==0.13.2
