@@ -1,5 +1,13 @@
-streamlit
-torch
-torchvision
-Pillow
-opencv-python-headless
+# Core dependencies
+streamlit==1.39.0
+ultralytics==8.3.37
+pillow==10.4.0
+numpy==1.26.4
+
+# Optional but recommended for smooth GPU / torch operation
+torch>=2.3.0
+torchvision>=0.18.0
+
+# For image processing and plotting (used internally by ultralytics)
+opencv-python-headless>=4.10.0.84
+matplotlib>=3.9.2
