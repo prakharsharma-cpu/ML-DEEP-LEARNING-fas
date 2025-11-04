@@ -1,8 +1,14 @@
-streamlit==1.39.0
-ultralytics==8.3.37
-pillow==10.4.0
-numpy==1.26.4
-torch>=2.3.0
-torchvision>=0.18.0
-opencv-python-headless>=4.10.0.84
-matplotlib>=3.9.2
+# --- Core Dependencies ---
+streamlit>=1.37.0
+torch>=2.0.0
+torchvision>=0.15.0
+pillow>=10.0.0
+numpy>=1.25.0
+
+# --- YOLOv5 ---
+# Installs YOLOv5 from the official ultralytics GitHub repo
+git+https://github.com/ultralytics/yolov5.git
+
+# --- Optional (for better visuals and fonts) ---
+matplotlib>=3.7.0
+opencv-python>=4.8.0
