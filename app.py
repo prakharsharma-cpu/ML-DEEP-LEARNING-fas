@@ -1,146 +1,143 @@
-# app_yolov5.py
-import io
-from pathlib import Path
+# ✅ Updated SmartPPE: Full-Person PPE Compliance Detection (Colab)
+# - Detects person only if a FULL PPE kit is worn.r
+# - Green = FULL PPE
+# - Yellow = PARTIALLY PPE
+# - Red = NO PPE
+# - All PPE items included: helmet, vest, mask, goggles, gloves, boots, coverall
+
+!pip install ultralytics pillow matplotlib opencv-python
+
+from ultralytics import YOLO
+from PIL import Image
+import matplotlib.pyplot as plt
+import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-import streamlit as st
+from google.colab import files
+import os
 
-# Try importing torch
-try:
-    import torch
-except Exception:
-    st.error(
-        "❌ PyTorch not installed. Install it first:\n\n"
-        "`pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu`"
-    )
-    st.stop()
+# ✅ Load YOLOv8x (or your custom PPE model)
+model = YOLO('yolov8x.pt')
+print("✅ Model Loaded:", model.model.yaml.get('name', 'yolov8x'))
 
-# ------------------------
-# Streamlit App Setup
-# ------------------------
-st.set_page_config(page_title="🦺 SmartPPE - YOLOv5 Detection", layout="centered")
-st.title("🦺 SmartPPE — YOLOv5 PPE Detection")
-st.markdown("Upload an image and detect PPE (helmet, vest, mask, etc.) using YOLOv5.")
+# ✅ FULL PPE MASTER LIST
+PPE_CATEGORIES = {
+    "helmet": ["helmet", "hardhat"],
+    "vest": ["vest", "safety vest", "hi-vis"],
+    "mask": ["mask", "face mask", "surgical mask"],
+    "goggles": ["goggles", "safety goggles", "glasses"],
+    "gloves": ["glove", "gloves"],
+    "boots": ["boots", "shoe", "safety boot"],
+    "coverall": ["coverall", "bodysuit", "ppe suit"]
+}
 
-# Sidebar settings
-st.sidebar.header("⚙️ Settings")
-model_path = st.sidebar.text_input("YOLOv5 Model Path (or use 'yolov5s')", value="best.pt")
-conf_thres = st.sidebar.slider("Confidence Threshold", 0.1, 1.0, 0.25, 0.01)
-max_det = st.sidebar.number_input("Max Detections per Image", min_value=1, max_value=300, value=100)
-use_gpu = st.sidebar.checkbox("Use GPU (CUDA)", value=False)
-img_size = st.sidebar.selectbox("Inference Image Size", [320, 416, 640, 960], index=2)
+# ✅ Person label
+PERSON_LABELS = ["person"]
 
-# ------------------------
-# Load YOLOv5 Model
-# ------------------------
-@st.cache_resource(ttl=60 * 60)
-def load_yolov5_model(path: str, device: str = "cpu"):
-    """Loads YOLOv5 model via torch.hub."""
-    try:
-        if Path(path).exists() and Path(path).suffix == ".pt":
-            model = torch.hub.load("ultralytics/yolov5", "custom", path, force_reload=False)
-        else:
-            model = torch.hub.load("ultralytics/yolov5", path, pretrained=True)
-        model.to(device)
-        return model
-    except Exception as e:
-        raise RuntimeError(f"⚠️ Failed to load YOLOv5 model: {e}")
+# Map predicted labels to PPE keys
 
-# ------------------------
-# File Upload
-# ------------------------
-uploaded_file = st.file_uploader("📤 Upload an Image", type=["jpg", "jpeg", "png"])
+def label_to_ppe_key(label):
+    ll = label.lower()
+    for key, options in PPE_CATEGORIES.items():
+        if any(v.lower() in ll for v in options):
+            return key
+    return None
 
-if uploaded_file:
-    image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Uploaded Image", use_container_width=True)
+# IoU helper
 
-    # Choose device
-    device = "cuda" if (use_gpu and torch.cuda.is_available()) else "cpu"
-    if use_gpu and device == "cpu":
-        st.warning("⚠️ GPU requested but not available — running on CPU.")
+def iou(A, B):
+    xA = max(A[0], B[0])
+    yA = max(A[1], B[1])
+    xB = min(A[2], B[2])
+    yB = min(A[3], B[3])
+    inter = max(0, xB - xA) * max(0, yB - yA)
+    if inter == 0:
+        return 0
+    areaA = (A[2] - A[0]) * (A[3] - A[1])
+    areaB = (B[2] - B[0]) * (B[3] - B[1])
+    return inter / (areaA + areaB - inter + 1e-9)
 
-    # Load model
-    try:
-        model = load_yolov5_model(model_path, device)
-    except Exception as e:
-        st.error(str(e))
-        st.stop()
+# ✅ FULL PPE REQUIRED LIST
+REQUIRED_PPE = [
+    "helmet", "vest", "mask", "goggles", "gloves", "boots", "coverall"
+]
 
-    # Apply thresholds
-    try:
-        model.conf = conf_thres
-        model.max_det = int(max_det)
-    except Exception:
-        pass
+# ✅ Analyze image for full PPE
 
-    # Run inference
-    with st.spinner("🔍 Detecting PPE..."):
-        results = model(np.array(image), size=img_size)
-        preds = results.xyxy[0].cpu().numpy() if len(results.xyxy) else np.empty((0, 6))
+def analyze_image(path, conf=0.35, imgsz=1280):
+    img = cv2.imread(path)
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-    if preds.shape[0] == 0:
-        st.info("No detections above threshold.")
-        st.stop()
+    result = model.predict(rgb, conf=conf, imgsz=imgsz)[0]
+    names = result.names
 
-    names = getattr(model, "names", {i: str(i) for i in range(100)})
-
-    # Annotate image
-    annotated = image.copy()
-    draw = ImageDraw.Draw(annotated)
-    try:
-        font = ImageFont.truetype("DejaVuSans.ttf", 16)
-    except:
-        font = ImageFont.load_default()
-
-    COLORS = [(255, 0, 0), (0, 255, 0), (255, 255, 0), (0, 128, 255), (255, 0, 255)]
     detections = []
-
-    for i, (x1, y1, x2, y2, conf, cls) in enumerate(preds):
-        x1, y1, x2, y2, cls = int(x1), int(y1), int(x2), int(y2), int(cls)
-        label = names.get(cls, f"class_{cls}")
-        conf_f = float(conf)
-        color = COLORS[i % len(COLORS)]
-
-        draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
-        text = f"{label} {conf_f:.2f}"
-        tw, th = draw.textsize(text, font)
-        draw.rectangle([x1, y1 - th - 4, x1 + tw + 4, y1], fill=color)
-        draw.text((x1 + 2, y1 - th - 2), text, fill="white", font=font)
-
-        # PPE recommendations
-        ll = label.lower()
-        if "helmet" in ll or "hardhat" in ll:
-            rec = "✅ Helmet detected"
-        elif "vest" in ll or "hi-vis" in ll:
-            rec = "✅ Safety vest detected"
-        elif "mask" in ll or "respirator" in ll:
-            rec = "✅ Mask detected"
-        elif "glove" in ll:
-            rec = "✅ Gloves detected"
-        else:
-            rec = "⚠️ Unknown object"
-
+    for b in result.boxes:
+        x1, y1, x2, y2 = b.xyxy[0].cpu().numpy()
+        conf = float(b.conf[0].cpu().numpy())
+        cid = int(b.cls[0].cpu().numpy())
+        label = names[cid]
         detections.append({
-            "Label": label,
-            "Confidence": round(conf_f, 3),
-            "BBox": [x1, y1, x2, y2],
-            "Recommendation": rec
+            "box": [x1, y1, x2, y2],
+            "score": conf,
+            "label": label
         })
 
-    # Display annotated image
-    st.subheader("🖼️ Annotated Image")
-    st.image(annotated, use_container_width=True)
+    persons = [d for d in detections if d["label"].lower() in PERSON_LABELS]
+    ppe_items = [d for d in detections if d["label"].lower() not in PERSON_LABELS]
 
-    # Detection table
-    st.subheader("📋 Detected Objects")
-    st.table(detections)
+    report = []
 
-    # Download annotated image
-    buf = io.BytesIO()
-    annotated.save(buf, format="PNG")
-    buf.seek(0)
-    st.download_button("📥 Download Annotated Image", data=buf, file_name="annotated.png", mime="image/png")
+    for idx, p in enumerate(persons):
+        boxP = p["box"]
+        found = set()
 
-else:
-    st.info("⬆️ Upload an image to start detection.")
+        for od in ppe_items:
+            key = label_to_ppe_key(od["label"])
+            if key and iou(boxP, od["box"]) > 0.12:
+                found.add(key)
+
+        missing = [r for r in REQUIRED_PPE if r not in found]
+
+        # ✅ Status color rules
+        if len(found) == 0:
+            status = "RED"      # No PPE
+        elif len(found) < len(REQUIRED_PPE):
+            status = "YELLOW"   # Partially PPE
+        else:
+            status = "GREEN"    # Fully PPE
+
+        report.append({
+            "person_id": idx+1,
+            "present": list(found),
+            "missing": missing,
+            "status": status
+        })
+
+        # ✅ Draw colored box
+        color = (0,255,0) if status=="GREEN" else (0,255,255) if status=="YELLOW" else (0,0,255)
+        x1,y1,x2,y2 = map(int, boxP)
+        cv2.rectangle(img, (x1,y1), (x2,y2), color, 3)
+        cv2.putText(img, f"P{idx+1} {status}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+    out_name = f"annotated_{os.path.basename(path)}"
+    cv2.imwrite(out_name, img)
+    print("✅ Saved:", out_name)
+
+    return img, report
+
+# ✅ Upload
+print("Upload images with people wearing PPE:")
+files_uploaded = files.upload()
+
+for f in files_uploaded:
+    print("\n🔍 Processing:", f)
+    img, rep = analyze_image(f)
+
+    plt.figure(figsize=(12,8))
+    plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    plt.axis('off')
+    plt.show()
+
+    print("📌 REPORT:")
+    for r in rep:
+        print(r)
